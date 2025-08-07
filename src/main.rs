@@ -6,7 +6,8 @@ use ratatui::{
     style::Stylize,
     symbols::border,
     text::{Line, Text},
-    widgets::{Block, Paragraph, Widget},
+    widgets::{Block, Borders, Paragraph, Widget},
+    prelude::{Constraint, Direction, Layout},
     DefaultTerminal, Frame,
 };
 
@@ -19,8 +20,42 @@ fn main() -> color_eyre::Result<()> {
 }
 
 #[derive(Debug, Default)]
+enum Row {
+    #[default] R0,
+    R1,
+    R2,
+}
+
+#[derive(Debug, Default)]
+enum Col {
+    #[default] C0,
+    C1,
+    C2,
+}
+
+type CellPos = ( Row, Col );
+
+#[derive(Debug, Default, Clone)]
+enum Player {
+    #[default] X,
+    O,
+}
+fn show_player(player: Option<Player>) -> String {
+    "X".to_string()
+}
+
+enum Dir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Default)]
 pub struct App {
-    counter: u8,
+    current_player: Player,
+    board: Vec<Vec<Cell>>,
+    active_cell: CellPos,
     exit: bool,
 }
 
@@ -38,7 +73,23 @@ impl App {
     }
 
     fn draw(&self, frame: &mut Frame) {
-        frame.render_widget(self, frame.area());
+        let outer_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Percentage(80),
+                Constraint::Percentage(20),
+            ])
+            .split(frame.area());
+
+
+
+        // frame.render_widget(self, frame.area());
+        frame.render_widget(self, outer_layout[0]);
+
+        frame.render_widget(
+            Paragraph::new("Bottom")
+                .block(Block::new().borders(Borders::ALL)),
+            outer_layout[1]);
     }
 
     fn handle_events(&mut self) -> Result<()> {
@@ -56,8 +107,10 @@ impl App {
         match (key.modifiers, key.code) {
             (_, KeyCode::Esc | KeyCode::Char('q'))
             | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.exit(),
-            (_, KeyCode::Left) => self.decrement_counter(),
-            (_, KeyCode::Right) => self.increment_counter(),
+            (_, KeyCode::Left) => self.move_active_cell(Dir::Left),
+            (_, KeyCode::Right) => self.move_active_cell(Dir::Right),
+            (_, KeyCode::Up) => self.move_active_cell(Dir::Up),
+            (_, KeyCode::Down) => self.move_active_cell(Dir::Down),
             _ => {}
         }
     }
@@ -66,12 +119,40 @@ impl App {
         self.exit = true;
     }
 
-    fn increment_counter(&mut self) {
-        self.counter += 1;
+    fn move_active_cell(&mut self, direction: Dir) {
+        let next_active_cell: CellPos = (Row::R1, Col::C2);
+        self.active_cell = next_active_cell;
     }
+}
 
-    fn decrement_counter(&mut self) {
-        self.counter -= 1;
+
+#[derive(Debug, Default)]
+struct Cell {
+    owner: Option<Player>,
+    is_active: bool,
+}
+
+impl Cell {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Widget for &Cell {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let text = show_player(self.owner.clone());
+
+        let block;
+        if self.is_active {
+            block = Block::bordered().border_set(border::THICK);
+        } else {
+            block = Block::bordered().border_set(border::PLAIN);
+        };
+
+        Paragraph::new(text)
+            .block(block)
+            .centered()
+            .render(area, buf);
     }
 }
 
@@ -90,22 +171,44 @@ impl Widget for &App {
             " Quit ".into(),
             "<Q> ".blue().bold(),
         ]);
+
         let block = Block::bordered()
             .title(title.centered())
             .title_bottom(instructions.centered())
             .border_set(border::THICK);
 
-        let counter_text = Text::from(vec![Line::from(vec![
-                "Value: ".into(),
-                self.counter.to_string().yellow(),
-        ])]);
 
-        Paragraph::new(counter_text)
-            .centered()
-            .block(block)
-            .render(area, buf)
+        // Paragraph::new(game_text)
+        //     .centered()
+        //     .block(block)
+        //     .render(area, buf);
+
+        let col_constraints = (0..3).map(|_| Constraint::Percentage(30));
+        let row_constraints = (0..3).map(|_| Constraint::Percentage(30));
+        let horizontal = Layout::horizontal(col_constraints).spacing(1);
+        let vertical = Layout::vertical(row_constraints);
+
+        let rows = vertical.split(area);
+        let cells = rows.iter().flat_map(|&row| horizontal.split(row).to_vec());
+
+        for (i, cell) in cells.enumerate() {
+            let c = Cell::new();
+            c.render(cell, buf)
+            // Paragraph::new(format!("Area {:02}", i + 1))
+                // .block(Block::bordered())
+                // .render(cell, buf);
+        }
+
     }
 }
+
+// fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
+//     let [area] = Layout::horizontal([horizontal])
+//         .flex(Flex::Center)
+//         .areas(area);
+//     let [area] = Layout::vertical([vertical]).flex(Flex::Center).areas(area);
+//     area
+// }
 
 #[cfg(test)]
 mod tests {
@@ -121,7 +224,10 @@ mod tests {
 
         let mut expected = Buffer::with_lines(vec![
             "┏━━━━━━━━━━━━━━━━━ Tic Tac Tui ━━━━━━━━━━━━━━━━━━┓",
-            "┃                    Value: 0                    ┃",
+            "┃                                                ┃",
+            "┃                    |-|-|-|                     ┃",
+            "┃                    |-|-|-|                     ┃",
+            "┃                    |-|-|-|                     ┃",
             "┃                                                ┃",
             "┗━ Decrement <Left> Increment <Right> Quit <Q> ━━┛",
         ]);
@@ -142,10 +248,10 @@ mod tests {
     fn handle_key_event() -> color_eyre::Result<()> {
         let mut app = App::default();
         app.handle_on_key_event(KeyCode::Right.into());
-        assert_eq!(app.counter, 1);
+        // assert_eq!(app.counter, 1);
 
         app.handle_on_key_event(KeyCode::Left.into());
-        assert_eq!(app.counter, 0);
+        // assert_eq!(app.counter, 0);
 
         let mut app = App::default();
         app.handle_on_key_event(KeyCode::Char('q').into());
