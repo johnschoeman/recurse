@@ -5,8 +5,8 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
-    style::Modifier,
     style::{Color, Style},
+    style::{Modifier},
     symbols::border,
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Widget},
@@ -45,18 +45,6 @@ enum Player {
     X,
     O,
 }
-trait ToOwner {
-    fn to_owner(&self) -> Owner;
-}
-impl ToOwner for Player {
-    fn to_owner(&self) -> Owner {
-        match self {
-            Player::X => Owner::X,
-            Player::O => Owner::O,
-        }
-    }
-}
-
 impl fmt::Display for Player {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -74,65 +62,26 @@ enum Dir {
 }
 
 #[derive(Debug, Default, Clone)]
-enum Owner {
+enum Col {
     #[default]
     N,
     X,
     O,
 }
-type Row = (Owner, Owner, Owner);
-type Board = (Row, Row, Row);
+type Row = Vec<Col>;
+type Board = Vec<Row>;
 
-trait Boardable {
-    fn get_at(&self, row_idx: usize, col_idx: usize) -> Owner;
-    fn set_at(&self, coordinate: Coordinate, owner: Owner) -> Board;
-}
-
-impl Boardable for Board {
-    fn get_at(&self, row_idx: usize, col_idx: usize) -> Owner {
-        match (row_idx, col_idx) {
-            (0, 0) => self.0.0.clone(),
-            (0, 1) => self.0.1.clone(),
-            (0, 2) => self.0.2.clone(),
-            (1, 0) => self.1.0.clone(),
-            (1, 1) => self.1.1.clone(),
-            (1, 2) => self.1.2.clone(),
-            (2, 0) => self.2.0.clone(),
-            (2, 1) => self.2.1.clone(),
-            (2, 2) => self.2.2.clone(),
-            (_, _) => self.0.0.clone(),
-        }
-    }
-
-    fn set_at(&self, (row_idx, col_idx): Coordinate, owner: Owner) -> Board {
-        let mut next: Board = self.clone();
-
-        match (row_idx, col_idx) {
-            (0, 0) => next.0.0 = owner,
-            (0, 1) => next.0.1 = owner,
-            (0, 2) => next.0.2 = owner,
-            (1, 0) => next.1.0 = owner,
-            (1, 1) => next.1.1 = owner,
-            (1, 2) => next.1.2 = owner,
-            (2, 0) => next.2.0 = owner,
-            (2, 1) => next.2.1 = owner,
-            (2, 2) => next.2.2 = owner,
-            (_, _) => next.0.0 = owner,
-        }
-
-        next
-    }
-}
-
-impl fmt::Display for Owner {
+impl fmt::Display for Col {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Owner::X => write!(f, "X"),
-            Owner::O => write!(f, "O"),
-            Owner::N => write!(f, "_"),
+            Col::N => write!(f, "-"),
+            Col::X => write!(f, "X"),
+            Col::O => write!(f, "O"),
         }
     }
 }
+
+struct Ui {}
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -165,7 +114,15 @@ impl<'game_state> Cell<'game_state> {
 
 impl GameState {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+           current_player: Player::X,
+           active_cells: (0, 0),
+           board: vec![
+               vec![Col::N,Col::N, Col::N],
+               vec![Col::N,Col::N, Col::N],
+               vec![Col::N,Col::N, Col::N],
+           ]
+        }
     }
 
     pub fn cell(&self, (r, c): Coordinate) -> Cell {
@@ -199,17 +156,6 @@ impl GameState {
                 }
             }
         }
-    }
-
-    fn make_move(&mut self) {
-        self.set_cell(self.active_cell.clone(), self.current_player.clone());
-        self.toggle_current_player()
-    }
-
-    fn set_cell(&mut self, active_cell: Coordinate, player: Player) {
-        let owner = player.to_owner();
-        let next_board = self.board.set_at(active_cell, owner);
-        self.board = next_board;
     }
 
     fn toggle_current_player(&mut self) {
@@ -293,7 +239,7 @@ impl App {
             (_, KeyCode::Right) => self.game_state.move_active_cell(Dir::Right),
             (_, KeyCode::Up) => self.game_state.move_active_cell(Dir::Up),
             (_, KeyCode::Down) => self.game_state.move_active_cell(Dir::Down),
-            (_, KeyCode::Enter) => self.game_state.make_move(),
+            (_, KeyCode::Enter) => self.game_state.toggle_current_player(),
             _ => {}
         }
     }
@@ -305,19 +251,11 @@ impl App {
 
 impl<'game_state> Widget for &Cell<'game_state> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let owner: &Owner = &self.game_state.board.get_at(self.row, self.col);
-        let active_cell = &self.game_state.active_cell;
+        let owner_text: &str = &self.game_state.board[self.row][self.col].to_string();
 
-        let block;
-        if active_cell.0 == self.row && active_cell.1 == self.col {
-            block = Block::bordered().border_set(border::THICK);
-        } else {
-            block = Block::bordered().border_set(border::PLAIN);
-        }
+        let block = Block::bordered().border_set(border::THICK);
 
-        let text = format!("{}", owner);
-
-        Paragraph::new(text)
+        Paragraph::new(owner_text)
             .block(block)
             .centered()
             .render(area, buf);
