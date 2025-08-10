@@ -55,6 +55,16 @@ enum Owner {
     O,
 }
 
+impl fmt::Display for Owner {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Owner::X => write!(f, "X"),
+            Owner::O => write!(f, "O"),
+            Owner::N => write!(f, "_"),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 enum Winner {
     #[default]
@@ -71,8 +81,8 @@ enum Dir {
     Down,
 }
 
-type Row = (Owner, Owner, Owner);
-type Board = (Row, Row, Row);
+type Row = [Owner; 3];
+type Board = [Row; 3];
 
 trait Boardable {
     fn get_at(&self, coordinate: Coordinate) -> Owner;
@@ -81,47 +91,13 @@ trait Boardable {
 
 impl Boardable for Board {
     fn get_at(&self, (row_idx, col_idx): Coordinate) -> Owner {
-        match (row_idx, col_idx) {
-            (0, 0) => self.0.0.clone(),
-            (0, 1) => self.0.1.clone(),
-            (0, 2) => self.0.2.clone(),
-            (1, 0) => self.1.0.clone(),
-            (1, 1) => self.1.1.clone(),
-            (1, 2) => self.1.2.clone(),
-            (2, 0) => self.2.0.clone(),
-            (2, 1) => self.2.1.clone(),
-            (2, 2) => self.2.2.clone(),
-            (_, _) => self.0.0.clone(),
-        }
+        self[row_idx][col_idx].clone()
     }
 
     fn set_at(&self, (row_idx, col_idx): Coordinate, owner: Owner) -> Board {
         let mut next: Board = self.clone();
-
-        match (row_idx, col_idx) {
-            (0, 0) => next.0.0 = owner,
-            (0, 1) => next.0.1 = owner,
-            (0, 2) => next.0.2 = owner,
-            (1, 0) => next.1.0 = owner,
-            (1, 1) => next.1.1 = owner,
-            (1, 2) => next.1.2 = owner,
-            (2, 0) => next.2.0 = owner,
-            (2, 1) => next.2.1 = owner,
-            (2, 2) => next.2.2 = owner,
-            (_, _) => next.0.0 = owner,
-        }
-
+        next[row_idx][col_idx] = owner;
         next
-    }
-}
-
-impl fmt::Display for Owner {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Owner::X => write!(f, "X"),
-            Owner::O => write!(f, "O"),
-            Owner::N => write!(f, "_"),
-        }
     }
 }
 
