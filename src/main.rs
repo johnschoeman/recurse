@@ -38,6 +38,15 @@ impl ToOwner for Player {
     }
 }
 
+impl fmt::Display for Player {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Player::X => write!(f, "X"),
+            Player::O => write!(f, "O"),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 enum Owner {
     #[default]
@@ -46,13 +55,13 @@ enum Owner {
     O,
 }
 
-impl fmt::Display for Player {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Player::X => write!(f, "X"),
-            Player::O => write!(f, "O"),
-        }
-    }
+#[derive(Debug, Default, Clone, PartialEq)]
+enum Winner {
+    #[default]
+    N,
+    X,
+    O,
+    Cat,
 }
 
 enum Dir {
@@ -196,7 +205,7 @@ impl GameState {
 
     fn is_valid_move(&mut self) -> bool {
         let is_current_cell_empty = self.board.get_at(self.active_cell) == Owner::N;
-        let is_game_over = self.winner() != Owner::N;
+        let is_game_over = self.winner() != Winner::N;
         is_current_cell_empty && !is_game_over
     }
 
@@ -214,36 +223,41 @@ impl GameState {
     }
 
     // TODO: Handle Cat's Game
-    fn winner(&self) -> Owner {
+    fn winner(&self) -> Winner {
         let lines = [
             [(0, 0), (0, 1), (0, 2)], // row 0
             [(1, 0), (1, 1), (1, 2)], // row 1
             [(2, 0), (2, 1), (2, 2)], // row 2
             [(0, 0), (1, 0), (2, 0)], // col 0
             [(0, 1), (1, 1), (2, 1)], // col 1
-            [(0, 2), (1, 1), (2, 2)], // col 2
+            [(0, 2), (1, 2), (2, 2)], // col 2
             [(0, 0), (1, 1), (2, 2)], // diag left to right
             [(0, 2), (1, 1), (2, 0)], // diag right to left
         ];
 
-        let x_wins = lines.into_iter().any(|line| {
+        let is_x_winner = lines.into_iter().any(|line| {
             line.into_iter()
                 .map(|coord| self.board.get_at(coord))
                 .all(|owner| owner == Owner::X)
         });
 
-        let o_wins = lines.into_iter().any(|line| {
+        let is_o_winner = lines.into_iter().any(|line| {
             line.into_iter()
                 .map(|coord| self.board.get_at(coord))
                 .all(|owner| owner == Owner::O)
         });
 
-        if x_wins {
-            Owner::X
-        } else if o_wins {
-            Owner::O
+        let is_board_full = false;
+        let is_cats = is_board_full && !is_x_winner && !is_o_winner;
+
+        if is_x_winner {
+            Winner::X
+        } else if is_o_winner {
+            Winner::O
+        } else if is_cats {
+            Winner::Cat
         } else {
-            Owner::N
+            Winner::N
         }
     }
 }
@@ -262,55 +276,7 @@ impl App {
     }
 
     fn draw(&self, frame: &mut Frame) {
-        let terminal_rect = frame.area();
-
-        let instructions = Line::from(vec![
-            " H,J,K,L ".into(),
-            "<Move Cell>".blue().bold(),
-            " Enter ".into(),
-            "<Place>".blue().bold(),
-            " R ".into(),
-            "<Reset>".blue().bold(),
-            " Quit ".into(),
-            "<Q> ".blue().bold(),
-        ]);
-
-        let title = Line::from(" Tic Tac Tui ").bold().yellow().centered();
-        let outer_block = Block::default()
-            .borders(Borders::ALL)
-            .title(title.centered())
-            .title_bottom(instructions.clone().centered())
-            .border_type(BorderType::Rounded);
-        frame.render_widget(outer_block, terminal_rect);
-
-        let outer_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .vertical_margin(1)
-            .horizontal_margin(1)
-            .constraints(vec![Constraint::Percentage(10), Constraint::Percentage(90)])
-            .split(terminal_rect);
-
-        // Top
-        let winner_text = match self.game_state.winner() {
-            Owner::N => "",
-            Owner::X => "X Wins",
-            Owner::O => "O Wins",
-        };
-
-        let winner_block = Block::default()
-            .borders(Borders::ALL)
-            .title(Line::from(" Winner ").yellow())
-            .border_type(BorderType::Rounded);
-
-        let winner_paragraph = Paragraph::new(winner_text)
-            .centered()
-            .bold()
-            .block(winner_block);
-
-        frame.render_widget(winner_paragraph, outer_layout[0]);
-
-        // Center
-        frame.render_widget(self, outer_layout[1]);
+        frame.render_widget(self, frame.area());
     }
 
     fn handle_events(&mut self) -> Result<()> {
@@ -345,32 +311,68 @@ impl App {
     }
 }
 
-impl<'game_state> Widget for &Cell<'game_state> {
+impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let owner: &Owner = &self.game_state.board.get_at((self.row, self.col));
-        let active_cell = &self.game_state.active_cell;
-        let current_player_text = format!(" {} ", self.game_state.current_player.to_string());
-        let block;
-        let is_active_cell = active_cell.0 == self.row && active_cell.1 == self.col;
-        if is_active_cell {
-            block = Block::new()
+        fn render_outer(area: Rect, buf: &mut Buffer) {
+            let title = Line::from(" Tic Tac Tui ").bold().yellow().centered();
+
+            let instructions = Line::from(vec![
+                " H,J,K,L ".into(),
+                "<Move Cell>".blue().bold(),
+                " Enter ".into(),
+                "<Place>".blue().bold(),
+                " R ".into(),
+                "<Reset>".blue().bold(),
+                " Quit ".into(),
+                "<Q> ".blue().bold(),
+            ]);
+
+            Block::default()
                 .borders(Borders::ALL)
+                .title(title.centered())
+                .title_bottom(instructions.clone().centered())
                 .border_type(BorderType::Rounded)
-                .title(current_player_text);
-        } else {
-            block = Block::new().borders(Borders::NONE);
+                .render(area, buf);
         }
 
-        let text = format!("{}", owner);
+        render_outer(area, buf);
 
-        Paragraph::new(text)
-            .block(block)
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .vertical_margin(1)
+            .horizontal_margin(1)
+            .constraints(vec![Constraint::Percentage(10), Constraint::Percentage(90)])
+            .split(area);
+
+        self.game_state.winner().render(layout[0], buf);
+
+        self.game_state.render(layout[1], buf);
+    }
+}
+
+impl Widget for &Winner {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let winner_text = match self {
+            Winner::N => "",
+            Winner::X => "X Wins",
+            Winner::O => "O Wins",
+            Winner::Cat => "Cat's Game",
+        };
+
+        let winner_block = Block::default()
+            .borders(Borders::ALL)
+            .title(Line::from(" Winner ").yellow())
+            .border_type(BorderType::Rounded);
+
+        Paragraph::new(winner_text)
             .centered()
+            .bold()
+            .block(winner_block)
             .render(area, buf);
     }
 }
 
-impl Widget for &App {
+impl Widget for &GameState {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let col_constraints = [
             Constraint::Percentage(30),
@@ -393,10 +395,38 @@ impl Widget for &App {
                 .split(*row_rect);
 
             for (c, cell_rect) in col_rects.iter().enumerate() {
-                let cell = self.game_state.cell((r, c));
+                let cell = self.cell((r, c));
                 cell.render(*cell_rect, buf)
             }
         }
+    }
+}
+
+impl<'game_state> Widget for &Cell<'game_state> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let owner: &Owner = &self.game_state.board.get_at((self.row, self.col));
+        let active_cell = &self.game_state.active_cell;
+
+        let current_player_text = format!(" {} ", self.game_state.current_player.to_string());
+
+        let block;
+        let is_active_cell = active_cell.0 == self.row && active_cell.1 == self.col;
+
+        if is_active_cell {
+            block = Block::new()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(current_player_text);
+        } else {
+            block = Block::new().borders(Borders::NONE);
+        }
+
+        let text = owner.to_string();
+
+        Paragraph::new(text)
+            .block(block)
+            .centered()
+            .render(area, buf);
     }
 }
 
@@ -408,7 +438,7 @@ mod tests {
     #[test]
     fn render() {
         let app = App::default();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 4));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 20));
 
         app.render(buf.area, &mut buf);
 
