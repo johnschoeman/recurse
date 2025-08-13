@@ -1,10 +1,8 @@
+use bevy::time::Stopwatch;
 use bevy::{
-    ecs::schedule::{ExecutorKind, ScheduleLabel},
+    math::bounding::{Aabb2d, IntersectsVolume},
     prelude::*,
-    time::common_conditions::on_timer,
-    window::PrimaryWindow,
 };
-
 use std::time::Duration;
 
 // Frame
@@ -27,7 +25,7 @@ const GAP_BETWEEN_SHIPS_AND_TOP: f32 = 25.0;
 const GAP_BETWEEN_SHIPS_AND_SIDE: f32 = 25.0;
 const GAP_BETWEEN_SHIPS_ROW: f32 = 25.0;
 const GAP_BETWEEN_SHIPS_COL: f32 = 25.0;
-const SHIP_INITIAL_SPEED: f32 = 500.0;
+const SHIP_INITIAL_SPEED: f32 = 100.0;
 const SHIP_PADDING: f32 = 5.0;
 
 const SHIP_COLS: u8 = 11;
@@ -49,14 +47,19 @@ impl Plugin for SpaceInvaderPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Score(0));
         app.insert_resource(Direction::Right);
-        app.add_systems(Startup, (setup_camera, setup_ships, setup_player));
+        app.add_systems(
+            Startup,
+            (setup_camera, setup_ships, setup_player, setup_debounce),
+        );
         app.add_systems(
             FixedUpdate,
             (
                 move_player,
                 fire_bullet,
-                move_ships.run_if(on_timer(Duration::from_secs_f32(2.0))),
+                move_ships,
                 move_bullets,
+                despawn_hits,
+                despawn_out_of_bounds,
             ),
         );
     }
@@ -87,8 +90,18 @@ enum Direction {
     Left,
 }
 
-#[derive(Component, Default)]
-struct Collider;
+#[derive(Resource)]
+struct DebounceState {
+    can_fire: bool,
+    timer: Stopwatch,
+}
+
+fn setup_debounce(mut commands: Commands) {
+    commands.insert_resource(DebounceState {
+        can_fire: true,
+        timer: Stopwatch::new(),
+    });
+}
 
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
@@ -110,7 +123,6 @@ fn setup_player(
             ..default()
         },
         Player,
-        Collider,
     ));
 }
 
@@ -138,7 +150,6 @@ fn setup_ships(
                     ..default()
                 },
                 Ship,
-                Collider,
             ));
         }
     }
@@ -169,13 +180,18 @@ fn move_player(
 }
 
 fn fire_bullet(
+    mut debounce_state: ResMut<DebounceState>,
     mut commands: Commands,
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut player_transform: Single<&mut Transform, With<Player>>,
+    player_transform: Single<&Transform, With<Player>>,
+    time: Res<Time>,
 ) {
-    if keyboard_input.pressed(KeyCode::Space) {
+    debounce_state.timer.tick(time.delta());
+
+    if keyboard_input.pressed(KeyCode::Space) && debounce_state.can_fire {
         let bullet_x = player_transform.translation.x;
         let bullet_y = player_transform.translation.y;
+
         commands.spawn((
             Sprite::from_color(BULLET_COLOR, Vec2::ONE),
             Transform {
@@ -184,35 +200,48 @@ fn fire_bullet(
                 ..default()
             },
             Bullet,
-            Collider,
         ));
+
+        debounce_state.can_fire = false;
+        debounce_state.timer.reset();
+    }
+
+    if debounce_state.timer.elapsed_secs() >= 0.5 && !debounce_state.can_fire {
+        debounce_state.can_fire = true;
     }
 }
 
 fn move_bullets(
     mut commands: Commands,
-    mut bullets: Query<(Entity, &mut Transform), With<Bullet>>,
+    mut bullet_transforms: Query<&mut Transform, With<Bullet>>,
     time: Res<Time>,
 ) {
-    let top_bound = WINDOW_HEIGHT / 2.0;
-    let bottom_bound = WINDOW_HEIGHT / -2.0;
-
-    for (bullet, mut bullet_transform) in bullets.iter_mut() {
+    for mut bullet_transform in bullet_transforms.iter_mut() {
         let next_bullet_position =
             bullet_transform.translation.y + BULLET_SPEED * time.delta_secs();
 
-        if next_bullet_position < top_bound {
-            bullet_transform.translation.y = next_bullet_position;
-        } else {
+        bullet_transform.translation.y = next_bullet_position;
+    }
+}
+
+fn despawn_out_of_bounds(
+    mut commands: Commands,
+    bullets: Query<(Entity, &Transform), With<Bullet>>,
+    time: Res<Time>,
+) {
+    let top_bound = WINDOW_HEIGHT / 2.0;
+
+    for (bullet, bullet_transform) in bullets.iter() {
+        if bullet_transform.translation.y > top_bound {
             commands.entity(bullet).despawn();
         }
     }
 }
 
 fn move_ships(
-    mut ships: Query<&mut Transform, With<Ship>>,
+    mut ship_transforms: Query<&mut Transform, With<Ship>>,
     mut direction: ResMut<Direction>,
-    _time: Res<Time>,
+    time: Res<Time>,
 ) {
     let left_bound = WINDOW_WIDTH / -2.0 + GAP_BETWEEN_SHIPS_COL;
     let right_bound = WINDOW_WIDTH / 2.0 - GAP_BETWEEN_SHIPS_COL;
@@ -221,12 +250,12 @@ fn move_ships(
     let mut max_ship_x_pos: f32 = 0.0;
     let mut min_ship_x_pos: f32 = 0.0;
 
-    for ship in ships.iter() {
-        if ship.translation.x > max_ship_x_pos {
-            max_ship_x_pos = ship.translation.x;
+    for ship_transform in ship_transforms.iter() {
+        if ship_transform.translation.x > max_ship_x_pos {
+            max_ship_x_pos = ship_transform.translation.x;
         }
-        if ship.translation.x < min_ship_x_pos {
-            min_ship_x_pos = ship.translation.x;
+        if ship_transform.translation.x < min_ship_x_pos {
+            min_ship_x_pos = ship_transform.translation.x;
         }
     }
 
@@ -244,14 +273,42 @@ fn move_ships(
         Direction::Right => 1.0,
     };
 
-    for mut ship_transform in ships.iter_mut() {
-        let next_ship_position = ship_transform.translation.x + dir_value * 10.0;
+    for mut ship_transform in ship_transforms.iter_mut() {
+        let next_ship_position =
+            ship_transform.translation.x + dir_value * SHIP_INITIAL_SPEED * time.delta_secs();
 
         ship_transform.translation.x = next_ship_position.clamp(left_bound, right_bound);
 
         if should_move_down {
             let next_ship_y = ship_transform.translation.y - 10.0;
             ship_transform.translation.y = next_ship_y;
+        }
+    }
+}
+
+fn despawn_hits(
+    mut commands: Commands,
+    bullets: Query<(Entity, &Transform), With<Bullet>>,
+    ships: Query<(Entity, &Transform), With<Ship>>,
+) {
+    for (bullet, bullet_transform) in bullets.iter() {
+        let bullet_bounding_box = Aabb2d::new(
+            bullet_transform.translation.truncate(),
+            bullet_transform.scale.truncate() / 2.0,
+        );
+
+        for (ship, ship_transform) in ships.iter() {
+            let ship_bounding_box = Aabb2d::new(
+                ship_transform.translation.truncate(),
+                ship_transform.scale.truncate() / 2.0,
+            );
+
+            if ship_bounding_box.intersects(&bullet_bounding_box) {
+                commands.entity(ship).despawn();
+                commands.entity(bullet).despawn();
+                // increase score;
+                // exit ship loop early;
+            }
         }
     }
 }
