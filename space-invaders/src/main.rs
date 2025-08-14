@@ -1,3 +1,4 @@
+// use bevy::prelude::*;
 use bevy::time::Stopwatch;
 use bevy::{
     math::bounding::{Aabb2d, IntersectsVolume},
@@ -5,9 +6,32 @@ use bevy::{
 };
 use std::time::Duration;
 
-// Frame
-const WINDOW_HEIGHT: f32 = 580.0;
-const WINDOW_WIDTH: f32 = 1000.0;
+const WINDOW_HEIGHT: f32 = 512.0;
+const WINDOW_WIDTH: f32 = 512.0;
+
+// pub mod game;
+// pub mod alien;
+// pub mod resolution;
+// pub mod player;
+// pub mod projectile;
+//
+// fn main() {
+//     App::new()
+//         .add_plugins(
+//             (DefaultPlugins.set(WindowPlugin {
+//                 primary_window: Some(Window {
+//                     title: String::from("Space Invaders"),
+//                     pos
+//                 }),
+//                 ..Default::default()
+//             }).set(ImagePlugin::default_nearest()),
+//             game::GamePlugin,
+//                 )
+//         )
+//         .run();
+// }
+
+
 
 // Player
 const PLAYER_SIZE: Vec2 = Vec2::new(50.0, 20.0);
@@ -17,21 +41,22 @@ const PLAYER_PADDING: f32 = 10.0;
 
 // Bullets
 const BULLET_SIZE: Vec2 = Vec2::new(5.0, 15.0);
-const BULLET_SPEED: f32 = 100.0;
+const BULLET_SPEED: f32 = 400.0;
+const BULLET_DEBOUNCE_DURATION: f32 = 0.7;
 
 // Ships
 const SHIP_SIZE: Vec2 = Vec2::new(25.0, 25.0);
+const SHIP_COLS: u8 = 11;
+const SHIP_ROWS: u8 = 5;
 const GAP_BETWEEN_SHIPS_AND_TOP: f32 = 25.0;
 const GAP_BETWEEN_SHIPS_AND_SIDE: f32 = 25.0;
 const GAP_BETWEEN_SHIPS_ROW: f32 = 25.0;
 const GAP_BETWEEN_SHIPS_COL: f32 = 25.0;
 const SHIP_INITIAL_SPEED: f32 = 100.0;
+const SHIP_SPEED_INCREASE: f32 = 5.0;
 const SHIP_PADDING: f32 = 5.0;
-
-const SHIP_COLS: u8 = 11;
-const SHIP_ROWS: u8 = 5;
-
-const INITIAL_SHIP_DURATION: u64 = 2;
+const SHIP_STEP_DOWN_DISTANCE: f32 = 15.0;
+const SHIP_POINTS: usize = 10;
 
 // Colors
 // const BACKGROUND_COLOR: Color = Color::srgb(0.9, 0.9, 0.9);
@@ -41,27 +66,40 @@ const SHIP_COLOR: Color = Color::srgb(0.7, 0.3, 0.3);
 const TEXT_COLOR: Color = Color::srgb(0.5, 0.5, 1.0);
 const SCORE_COLOR: Color = Color::srgb(1.0, 0.5, 0.5);
 
+// Scoreboard
+const SCOREBOARD_FONT_SIZE: f32 = 33.0;
+const SCOREBOARD_TEXT_PADDING: Val = Val::Px(5.0);
+
 pub struct SpaceInvaderPlugin;
 
 impl Plugin for SpaceInvaderPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Score(0));
         app.insert_resource(Direction::Right);
+        app.insert_resource(GameState::Game);
+        app.insert_resource(ShipSpeed(SHIP_INITIAL_SPEED));
         app.add_systems(
             Startup,
-            (setup_camera, setup_ships, setup_player, setup_debounce),
+            (
+                setup_camera,
+                setup_ships,
+                setup_player,
+                setup_shoot_debounce,
+                setup_scoreboard,
+            ),
         );
         app.add_systems(
             FixedUpdate,
             (
-                move_player,
-                fire_bullet,
+                handle_move_player,
+                handle_shoot_bullet,
                 move_ships,
                 move_bullets,
                 despawn_hits,
                 despawn_out_of_bounds,
             ),
         );
+        app.add_systems(Update, update_scoreboard);
     }
 }
 
@@ -84,6 +122,18 @@ struct Bullet;
 #[derive(Resource, Deref, DerefMut)]
 struct Score(usize);
 
+#[derive(Component)]
+struct ScoreboardUi;
+
+#[derive(Resource, Deref, DerefMut)]
+struct ShipSpeed(f32);
+
+#[derive(Resource)]
+enum GameState {
+    Game,
+    GameOver,
+}
+
 #[derive(Resource)]
 enum Direction {
     Right,
@@ -91,20 +141,54 @@ enum Direction {
 }
 
 #[derive(Resource)]
-struct DebounceState {
-    can_fire: bool,
+struct ShootDebounce {
+    can_shoot: bool,
     timer: Stopwatch,
 }
 
-fn setup_debounce(mut commands: Commands) {
-    commands.insert_resource(DebounceState {
-        can_fire: true,
+fn setup_shoot_debounce(mut commands: Commands) {
+    commands.insert_resource(ShootDebounce {
+        can_shoot: true,
         timer: Stopwatch::new(),
     });
 }
 
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
+}
+
+fn setup_scoreboard(mut commands: Commands, score: Res<Score>) {
+    commands.spawn((
+        Text::new("Score: "),
+        TextFont {
+            font_size: SCOREBOARD_FONT_SIZE,
+            ..default()
+        },
+        TextColor(TEXT_COLOR),
+        ScoreboardUi,
+        Node {
+            position_type: PositionType::Absolute,
+            top: SCOREBOARD_TEXT_PADDING,
+            left: SCOREBOARD_TEXT_PADDING,
+            ..default()
+        },
+        children![(
+            TextSpan::default(),
+            TextFont {
+                font_size: SCOREBOARD_FONT_SIZE,
+                ..default()
+            },
+            TextColor(SCORE_COLOR),
+        )],
+    ));
+}
+
+fn update_scoreboard(
+    score: Res<Score>,
+    score_root: Single<Entity, (With<ScoreboardUi>, With<Text>)>,
+    mut writer: TextUiWriter,
+) {
+    *writer.text(*score_root, 1) = score.to_string();
 }
 
 fn setup_player(
@@ -155,7 +239,7 @@ fn setup_ships(
     }
 }
 
-fn move_player(
+fn handle_move_player(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut player_transform: Single<&mut Transform, With<Player>>,
     time: Res<Time>,
@@ -179,16 +263,16 @@ fn move_player(
     player_transform.translation.x = next_player_position.clamp(left_bound, right_bound);
 }
 
-fn fire_bullet(
-    mut debounce_state: ResMut<DebounceState>,
+fn handle_shoot_bullet(
+    mut shoot_debounce: ResMut<ShootDebounce>,
     mut commands: Commands,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     player_transform: Single<&Transform, With<Player>>,
     time: Res<Time>,
 ) {
-    debounce_state.timer.tick(time.delta());
+    shoot_debounce.timer.tick(time.delta());
 
-    if keyboard_input.pressed(KeyCode::Space) && debounce_state.can_fire {
+    if keyboard_input.pressed(KeyCode::Space) && shoot_debounce.can_shoot {
         let bullet_x = player_transform.translation.x;
         let bullet_y = player_transform.translation.y;
 
@@ -202,12 +286,13 @@ fn fire_bullet(
             Bullet,
         ));
 
-        debounce_state.can_fire = false;
-        debounce_state.timer.reset();
+        shoot_debounce.can_shoot = false;
+        shoot_debounce.timer.reset();
     }
 
-    if debounce_state.timer.elapsed_secs() >= 0.5 && !debounce_state.can_fire {
-        debounce_state.can_fire = true;
+    if shoot_debounce.timer.elapsed_secs() >= BULLET_DEBOUNCE_DURATION && !shoot_debounce.can_shoot
+    {
+        shoot_debounce.can_shoot = true;
     }
 }
 
@@ -241,10 +326,13 @@ fn despawn_out_of_bounds(
 fn move_ships(
     mut ship_transforms: Query<&mut Transform, With<Ship>>,
     mut direction: ResMut<Direction>,
+    mut game_state: ResMut<GameState>,
+    ship_speed: Res<ShipSpeed>,
     time: Res<Time>,
 ) {
     let left_bound = WINDOW_WIDTH / -2.0 + GAP_BETWEEN_SHIPS_COL;
     let right_bound = WINDOW_WIDTH / 2.0 - GAP_BETWEEN_SHIPS_COL;
+    let bottom_bound = WINDOW_HEIGHT / -2.0;
     let mut should_move_down: bool = false;
 
     let mut max_ship_x_pos: f32 = 0.0;
@@ -275,19 +363,25 @@ fn move_ships(
 
     for mut ship_transform in ship_transforms.iter_mut() {
         let next_ship_position =
-            ship_transform.translation.x + dir_value * SHIP_INITIAL_SPEED * time.delta_secs();
+            ship_transform.translation.x + dir_value * **ship_speed * time.delta_secs();
 
         ship_transform.translation.x = next_ship_position.clamp(left_bound, right_bound);
 
         if should_move_down {
-            let next_ship_y = ship_transform.translation.y - 10.0;
+            let next_ship_y = ship_transform.translation.y - SHIP_STEP_DOWN_DISTANCE;
             ship_transform.translation.y = next_ship_y;
+        }
+
+        if ship_transform.translation.y < bottom_bound {
+            // **game_state = GameState::GameOver;
         }
     }
 }
 
 fn despawn_hits(
     mut commands: Commands,
+    mut ship_speed: ResMut<ShipSpeed>,
+    mut score: ResMut<Score>,
     bullets: Query<(Entity, &Transform), With<Bullet>>,
     ships: Query<(Entity, &Transform), With<Ship>>,
 ) {
@@ -306,8 +400,9 @@ fn despawn_hits(
             if ship_bounding_box.intersects(&bullet_bounding_box) {
                 commands.entity(ship).despawn();
                 commands.entity(bullet).despawn();
-                // increase score;
-                // exit ship loop early;
+                **ship_speed += SHIP_SPEED_INCREASE;
+                **score += SHIP_POINTS;
+                break; // bullet can only hit one ship
             }
         }
     }
